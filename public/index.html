@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>Zen Garden Vault</title>
+	<link rel="stylesheet" href="styles.css">
+</head>
+
+<body>
+	<div id="loading">Tending the Garden...<br><small id="debug-status" style="font-size: 12px; opacity: 0.7;">Waiting
+			for DOM...</small></div>
+
+	<div class="controls-hint">
+		<b>WASD</b>: Move<br>
+		<b>SPACE</b>: Dash/Jump<br>
+		<b>E</b>: Read Book<br>
+		<b>P</b>: Toggle Plan/Edit Mode<br>
+		<b>Edit</b>: WASD or Right-Drag to Pan
+	</div>
+
+	<div id="debug-console">
+		<div style="font-weight: bold; margin-bottom: 5px;">DEBUG CONSOLE</div>
+		<div id="player-pos">X: 0 Y: 0</div>
+		<button class="debug-btn" onclick="teleportToCenter()">Teleport to Center</button>
+		<button class="debug-btn" onclick="resetPlayer()">Reset Momentum</button>
+	</div>
+
+	<canvas id="gameCanvas"></canvas>
+
+	<div id="ui-layer">
+		<span id="interaction-text">Press <b>E</b> to Read</span>
+	</div>
+
+	<div id="editor-panel" class="panel hidden">
+		<div class="panel-title">World Builder</div>
+		<div class="panel-row">
+			<span class="label">Mode</span>
+			<span id="mode-indicator" class="pill">PLAY</span>
+		</div>
+		<div class="panel-row">
+			<span class="label">Tool</span>
+			<div class="tool-group">
+				<button class="tool-btn" data-tool="paint">Paint</button>
+				<button class="tool-btn" data-tool="rect">Rect</button>
+				<button class="tool-btn" data-tool="circle">Circle</button>
+				<button class="tool-btn" data-tool="erase">Erase</button>
+			</div>
+		</div>
+		<div class="panel-row">
+			<span class="label">Tiles</span>
+			<div id="tile-palette" class="palette"></div>
+		</div>
+		<div class="panel-row">
+			<span class="label">Zoom</span>
+			<div class="tool-group">
+				<button class="tool-btn" id="zoom-out">-</button>
+				<span id="zoom-value" class="pill">1.0x</span>
+				<button class="tool-btn" id="zoom-in">+</button>
+			</div>
+		</div>
+		<div class="panel-row">
+			<button class="tool-btn wide" id="export-world">Export World</button>
+		</div>
+	</div>
+
+	<div id="export-modal" class="export-modal">
+		<div class="export-header">
+			<span class="modal-title">World Export</span>
+			<span class="close-btn" id="export-close">✕</span>
+		</div>
+		<textarea id="export-text" spellcheck="false"></textarea>
+	</div>
+
+	<div id="note-modal">
+		<div class="modal-header">
+			<span class="modal-title" id="note-title">Untitled</span>
+			<span class="close-btn" onclick="closeModal()">✕</span>
+		</div>
+		<div class="modal-body" id="note-content"></div>
+	</div>
+
+	<script src="game.js" defer></script>
+</body>
+
+</html>

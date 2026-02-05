@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>Zen Garden Vault 3D</title>
+	<link rel="stylesheet" href="/game/style.css">
+</head>
+
+<body>
+	<div id="loading">Weaving the Library...<br><small id="debug-status" style="font-size: 12px; opacity: 0.7;">Loading
+			assets...</small></div>
+
+	<div id="status-bar">Status: Booting…</div>
+
+	<div class="controls-hint">
+		<b>WASD</b>: Move<br>
+		<b>SPACE</b>: Dash/Jump<br>
+		<b>E</b>: Read Book<br>
+		<b>P</b>: Toggle Plan/Edit Mode
+	</div>
+
+	<div id="ui-layer">
+		<span id="interaction-text">Press <b>E</b> to Read</span>
+	</div>
+
+	<div id="editor-panel" class="panel hidden">
+		<div class="panel-title">World Builder</div>
+		<div class="panel-row">
+			<span class="label">Mode</span>
+			<span id="mode-indicator" class="pill">PLAY</span>
+		</div>
+		<div class="panel-row">
+			<span class="label">Tool</span>
+			<div class="tool-group">
+				<button class="tool-btn" data-tool="paint">Paint</button>
+				<button class="tool-btn" data-tool="rect">Rect</button>
+				<button class="tool-btn" data-tool="circle">Circle</button>
+				<button class="tool-btn" data-tool="erase">Erase</button>
+			</div>
+		</div>
+		<div class="panel-row">
+			<span class="label">Tiles</span>
+			<div id="tile-palette" class="palette"></div>
+		</div>
+		<div class="panel-row">
+			<button class="tool-btn wide" id="export-world">Export World</button>
+		</div>
+	</div>
+
+	<div id="settings-panel" class="panel settings-panel">
+		<div class="panel-title">Settings</div>
+		<label class="toggle-row">
+			<input type="checkbox" id="invert-mouse">
+			<span>Invert Mouse Y</span>
+		</label>
+	</div>
+
+	<div id="export-modal" class="export-modal">
+		<div class="export-header">
+			<span class="modal-title">World Export</span>
+			<span class="close-btn" id="export-close">✕</span>
+		</div>
+		<textarea id="export-text" spellcheck="false"></textarea>
+	</div>
+
+	<div id="note-modal">
+		<div class="modal-header">
+			<span class="modal-title" id="note-title">Untitled</span>
+			<span class="close-btn" id="note-close">✕</span>
+		</div>
+		<div class="modal-body" id="note-content"></div>
+	</div>
+
+	<script type="module" src="/game/js/main.js"></script>
+</body>
+
+</html>
