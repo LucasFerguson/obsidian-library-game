@@ -1,0 +1,16 @@
+{
+	"name": "obsidian-library-game",
+	"version": "1.0.0",
+	"private": true,
+	"description": "Zen Garden Vault game",
+	"main": "server.js",
+	"scripts": {
+		"start": "node server.js",
+		"gen:world": "node scripts/generate-world.js",
+		"copy:three": "node scripts/copy-three.js",
+		"postinstall": "node scripts/copy-three.js"
+	},
+	"dependencies": {
+		"three": "^0.160.0"
+	}
+}

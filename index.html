@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>Zen Garden Vault</title>
+	<style>
+		:root {
+			--bg-color: #1e1e1e;
+			--text-color: #dcddde;
+			--accent-color: #4caf50;
+			--ui-bg: rgba(255, 255, 255, 0.95);
+			--ui-text: #333;
+		}
+
+		body,
+		html {
+			margin: 0;
+			padding: 0;
+			width: 100%;
+			height: 100%;
+			background-color: #87CEEB;
+			overflow: hidden;
+			font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+			color: var(--text-color);
+		}
+
+		#gameCanvas {
+			display: block;
+		}
+
+		/* Interaction UI */
+		#ui-layer {
+			position: absolute;
+			bottom: 30px;
+			left: 50%;
+			transform: translateX(-50%);
+			background: rgba(255, 255, 255, 0.9);
+			color: #333;
+			padding: 12px 25px;
+			border-radius: 30px;
+			border: 2px solid #fff;
+			box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+			font-weight: bold;
+			pointer-events: none;
+			transition: opacity 0.3s, transform 0.3s;
+			opacity: 0;
+			z-index: 10;
+		}
+
+		#ui-layer.visible {
+			opacity: 1;
+			transform: translateX(-50%) translateY(-10px);
+		}
+
+		/* Debug Console in Bottom Left */
+		#debug-console {
+			position: absolute;
+			bottom: 20px;
+			left: 20px;
+			background: rgba(0, 0, 0, 0.7);
+			color: #00ff00;
+			padding: 15px;
+			border-radius: 8px;
+			font-family: 'Courier New', Courier, monospace;
+			font-size: 12px;
+			display: flex;
+			flex-direction: column;
+			gap: 8px;
+			border: 1px solid #444;
+			z-index: 20;
+		}
+
+		.debug-btn {
+			background: #444;
+			color: white;
+			border: none;
+			padding: 5px 10px;
+			cursor: pointer;
+			border-radius: 4px;
+			font-size: 11px;
+			transition: background 0.2s;
+		}
+
+		.debug-btn:hover {
+			background: #666;
+		}
+
+		.controls-hint {
+			position: absolute;
+			top: 20px;
+			right: 20px;
+			background: rgba(255, 255, 255, 0.7);
+			color: #000;
+			padding: 12px;
+			border-radius: 12px;
+			font-size: 0.85rem;
+			pointer-events: none;
+			box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
+		}
+
+		#note-modal {
+			display: none;
+			position: absolute;
+			top: 50%;
+			left: 50%;
+			transform: translate(-50%, -50%);
+			width: 600px;
+			max-width: 90%;
+			max-height: 80%;
+			background-color: var(--ui-bg);
+			color: var(--ui-text);
+			box-shadow: 0 20px 50px rgba(0, 0, 0, 0.3);
+			border-radius: 16px;
+			padding: 0;
+			flex-direction: column;
+			z-index: 100;
+			overflow: hidden;
+		}
+
+		.modal-header {
+			background: #f1f8e9;
+			padding: 15px 25px;
+			border-bottom: 1px solid #e0e0e0;
+			display: flex;
+			justify-content: space-between;
+			align-items: center;
+		}
+
+		.modal-title {
+			font-size: 1.3rem;
+			font-weight: bold;
+			color: #2e7d32;
+		}
+
+		.close-btn {
+			cursor: pointer;
+			padding: 5px 10px;
+			background: #e0e0e0;
+			border-radius: 6px;
+		}
+
+		.modal-body {
+			padding: 25px;
+			overflow-y: auto;
+			line-height: 1.6;
+			flex-grow: 1;
+		}
+
+		#loading {
+			position: absolute;
+			top: 50%;
+			left: 50%;
+			transform: translate(-50%, -50%);
+			font-size: 24px;
+			color: #fff;
+			text-align: center;
+		}
+
+		h1 {
+			color: #2e7d32;
+			margin-top: 0;
+		}
+	</style>
+</head>
+
+<body>
+
+	<div id="loading">Tending the Garden...<br><small id="debug-status" style="font-size: 12px; opacity: 0.7;">Waiting
+			for DOM...</small></div>
+
+	<div class="controls-hint">
+		<b>WASD</b>: Move<br>
+		<b>SPACE</b>: Dash/Jump<br>
+		<b>E</b>: Read Book
+	</div>
+
+	<div id="debug-console">
+		<div style="font-weight: bold; margin-bottom: 5px;">DEBUG CONSOLE</div>
+		<div id="player-pos">X: 0 Y: 0</div>
+		<button class="debug-btn" onclick="teleportToCenter()">Teleport to Center</button>
+		<button class="debug-btn" onclick="resetPlayer()">Reset Momentum</button>
+	</div>
+
+	<canvas id="gameCanvas"></canvas>
+
+	<div id="ui-layer">
+		<span id="interaction-text">Press <b>E</b> to Read</span>
+	</div>
+
+	<div id="note-modal">
+		<div class="modal-header">
+			<span class="modal-title" id="note-title">Untitled</span>
+			<span class="close-btn" onclick="closeModal()">✕</span>
+		</div>
+		<div class="modal-body" id="note-content"></div>
+	</div>
+
+	<script>
+		/**
+		 * LOGGING
+		 */
+		function log(msg) {
+			console.log(`[Garden Log] ${msg}`);
+			const status = document.getElementById('debug-status');
+			if (status) status.innerText = msg;
+		}
+
+		/**
+		 * CONFIG & STATE
+		 */
+		const TILE_SIZE = 40;
+		const MAP_WIDTH = 100;
+		const MAP_HEIGHT = 100;
+		const TILE = { VOID: 0, GRASS: 1, WOOD: 2, STONE: 3, WATER: 4, SAND: 5, WALL: 6, SHELF: 7, TABLE: 8 };
+		const COLORS = { grass: '#66bb6a', wood: '#d7ccc8', stone: '#cfd8dc', water: '#4fc3f7', sand: '#fff9c4', wall: '#5d4037', shelf: '#3e2723', player: '#f50057' };
+
+		let canvas = null;
+		let ctx = null;
+		let map = [], items = [], keys = {}, isModalOpen = false;
+		let camera = { x: 0, y: 0 };
+		const player = { x: 0, y: 0, vx: 0, vy: 0, radius: 12, z: 0, vz: 0, dashCooldown: 0 };
+
+		const MOCK_NOTES = [
+			{ title: "The Flow of State", content: "React states are like seasons. They change, they cycle, and eventually, they render beauty." },
+			{ title: "Binary Zen", content: "Between 0 and 1, there is a space. In that space, the soul of the machine rests." },
+			{ title: "Recursive Love", content: "To understand love, you must first understand love. It is a loop with no base case." }
+		];
+
+		/**
+		 * ENGINE
+		 */
+		function init() {
+			log("Initializing garden map...");
+			generateMap();
+			teleportToCenter();
+			log("Starting game loop...");
+			requestAnimationFrame(gameLoop);
+		}
+
+		function generateMap() {
+			for (let x = 0; x < MAP_WIDTH; x++) {
+				map[x] = [];
+				for (let y = 0; y < MAP_HEIGHT; y++) map[x][y] = TILE.GRASS;
+			}
+			const cx = Math.floor(MAP_WIDTH / 2), cy = Math.floor(MAP_HEIGHT / 2);
+			fillArea(cx - 7, cy - 7, 14, 14, TILE.WOOD);
+			fillArea(cx - 1, cy - 30, 3, 60, TILE.STONE);
+			fillArea(cx - 30, cy - 1, 60, 3, TILE.STONE);
+
+			for (let i = 0; i < 30; i++) {
+				let rx = Math.floor(Math.random() * 20) + cx - 10;
+				let ry = Math.floor(Math.random() * 20) + cy - 10;
+				if (map[rx][ry] === TILE.WOOD) {
+					map[rx][ry] = TILE.SHELF;
+					items.push({ x: rx, y: ry, data: MOCK_NOTES[i % MOCK_NOTES.length] });
+				}
+			}
+			const loading = document.getElementById('loading');
+			if (loading) loading.style.display = 'none';
+		}
+
+		function fillArea(x, y, w, h, t) {
+			for (let i = x; i < x + w; i++) for (let j = y; j < y + h; j++) map[i][j] = t;
+		}
+
+		function teleportToCenter() {
+			player.x = (MAP_WIDTH * TILE_SIZE) / 2;
+			player.y = (MAP_HEIGHT * TILE_SIZE) / 2;
+			resetPlayer();
+			log("Player teleported to center.");
+		}
+
+		function resetPlayer() {
+			player.vx = 0;
+			player.vy = 0;
+			player.vz = 0;
+			player.z = 0;
+		}
+
+		function update() {
+			if (isModalOpen || !canvas) return;
+
+			let ax = 0, ay = 0;
+			if (keys['KeyW']) ay -= 1.2;
+			if (keys['KeyS']) ay += 1.2;
+			if (keys['KeyA']) ax -= 1.2;
+			if (keys['KeyD']) ax += 1.2;
+
+			player.vx = (player.vx + ax) * 0.85;
+			player.vy = (player.vy + ay) * 0.85;
+
+			if (player.dashCooldown > 0) player.dashCooldown--;
+
+			player.z += player.vz;
+			player.vz -= 0.5;
+			if (player.z < 0) { player.z = 0; player.vz = 0; }
+
+			const nx = player.x + player.vx, ny = player.y + player.vy;
+			if (!isSolid(nx, player.y)) player.x = nx;
+			if (!isSolid(player.x, ny)) player.y = ny;
+
+			camera.x += (player.x - canvas.width / 2 - camera.x) * 0.1;
+			camera.y += (player.y - canvas.height / 2 - camera.y) * 0.1;
+
+			// Update Debug Text
+			const debugPos = document.getElementById('player-pos');
+			if (debugPos) debugPos.innerText = `X: ${Math.floor(player.x)} Y: ${Math.floor(player.y)}`;
+
+			updateUI();
+		}
+
+		function isSolid(x, y) {
+			const tx = Math.floor(x / TILE_SIZE), ty = Math.floor(y / TILE_SIZE);
+			if (tx < 0 || tx >= MAP_WIDTH || ty < 0 || ty >= MAP_HEIGHT) return true;
+			return [TILE.WALL, TILE.SHELF, TILE.WATER].includes(map[tx][ty]);
+		}
+
+		function updateUI() {
+			const near = getNear();
+			const uiLayer = document.getElementById('ui-layer');
+			if (!uiLayer) return;
+
+			if (near) {
+				uiLayer.classList.add('visible');
+			} else {
+				uiLayer.classList.remove('visible');
+			}
+		}
+
+		function getNear() {
+			const item = items.find(i => Math.hypot(i.x * TILE_SIZE + 20 - player.x, i.y * TILE_SIZE + 20 - player.y) < 50);
+			return item ? { type: 'item', data: item.data } : null;
+		}
+
+		/**
+		 * MODAL
+		 */
+		function openModal(title, contentText) {
+			isModalOpen = true;
+			const titleElem = document.getElementById('note-title');
+			const contentElem = document.getElementById('note-content');
+			const modal = document.getElementById('note-modal');
+
+			if (titleElem) titleElem.innerText = title;
+			if (contentElem) contentElem.innerText = contentText;
+			if (modal) modal.style.display = 'flex';
+		}
+
+		function closeModal() {
+			isModalOpen = false;
+			const modal = document.getElementById('note-modal');
+			if (modal) modal.style.display = 'none';
+		}
+
+		/**
+		 * RENDERING
+		 */
+		function draw() {
+			if (!ctx || !canvas) return;
+			ctx.clearRect(0, 0, canvas.width, canvas.height);
+			ctx.save();
+			ctx.translate(-camera.x, -camera.y);
+
+			for (let x = 0; x < MAP_WIDTH; x++) {
+				for (let y = 0; y < MAP_HEIGHT; y++) {
+					const px = x * TILE_SIZE, py = y * TILE_SIZE;
+					if (px < camera.x - 50 || px > camera.x + canvas.width + 50 ||
+						py < camera.y - 50 || py > camera.y + canvas.height + 50) continue;
+
+					ctx.fillStyle = Object.values(COLORS)[map[x][y]] || '#fff';
+					ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+				}
+			}
+
+			ctx.fillStyle = COLORS.player;
+			ctx.beginPath();
+			ctx.arc(player.x, player.y - player.z, player.radius, 0, Math.PI * 2);
+			ctx.fill();
+
+			ctx.restore();
+		}
+
+		function gameLoop() {
+			update();
+			draw();
+			requestAnimationFrame(gameLoop);
+		}
+
+		function resize() {
+			if (canvas) {
+				canvas.width = window.innerWidth;
+				canvas.height = window.innerHeight;
+			}
+		}
+
+		// Global Listeners
+		window.addEventListener('keydown', e => {
+			keys[e.code] = true;
+			if (e.code === 'KeyE') {
+				const near = getNear();
+				if (near) openModal(near.data.title, near.data.content);
+			}
+			if (e.code === 'Space' && !isModalOpen && player.dashCooldown === 0) {
+				player.vz = 6;
+				player.vx *= 2.5;
+				player.vy *= 2.5;
+				player.dashCooldown = 30;
+			}
+			if (e.code === 'Escape') closeModal();
+		});
+		window.addEventListener('keyup', e => keys[e.code] = false);
+		window.addEventListener('resize', resize);
+
+		window.onload = function () {
+			log("DOM Loaded. Initializing Canvas...");
+			canvas = document.getElementById('gameCanvas');
+			if (canvas) {
+				ctx = canvas.getContext('2d');
+				resize();
+				init();
+			}
+		};
+
+	</script>
+</body>
+
+</html>
