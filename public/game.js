@@ -42,10 +42,32 @@ TILE_COLORS[TILE.TABLE] = COLORS.wood;
 
 let canvas = null;
 let ctx = null;
-let map = [], items = [], keys = {}, isModalOpen = false;
+let map = [], items = [], tables = [], keys = {}, isModalOpen = false;
 let camera = { x: 0, y: 0 };
 const player = { x: 0, y: 0, vx: 0, vy: 0, radius: 12, z: 0, vz: 0, dashCooldown: 0 };
 let noteCursor = 0;
+let roomCounter = 0;
+const roomStack = [];
+const roomsById = new Map();
+let currentRoom = null;
+let transition = {
+	active: false,
+	type: null,
+	t: 0,
+	duration: 180,
+	scale: 1,
+	fromScale: 1,
+	toScale: 1,
+	fromRoom: null,
+	toRoom: null,
+	fromPlayer: null,
+	toPlayer: null,
+	pivotWorld: null,
+	switched: false,
+	swapAt: 0.2,
+	ease: 0
+};
+let preloadedRooms = [];
 let isExportOpen = false;
 
 const editor = {
@@ -85,6 +107,16 @@ async function init() {
 		log("Falling back to procedural map...");
 		generateProceduralMap();
 	}
+	if (!currentRoom) {
+		const room = createBlankRoom(MAP_WIDTH, MAP_HEIGHT);
+		room.map = map;
+		room.items = items;
+		room.tables = tables;
+		roomStack.push(room);
+		roomsById.set(room.id, room);
+		setCurrentRoom(room);
+	}
+	await loadPreloadedRooms();
 	teleportToCenter();
 	hideLoading();
 	log("Starting game loop...");
@@ -92,24 +124,22 @@ async function init() {
 }
 
 function generateProceduralMap() {
-	for (let x = 0; x < MAP_WIDTH; x++) {
-		map[x] = [];
-		for (let y = 0; y < MAP_HEIGHT; y++) map[x][y] = TILE.GRASS;
-	}
-	const cx = Math.floor(MAP_WIDTH / 2), cy = Math.floor(MAP_HEIGHT / 2);
-	fillArea(cx - 7, cy - 7, 14, 14, TILE.WOOD);
-	fillArea(cx - 1, cy - 30, 3, 60, TILE.STONE);
-	fillArea(cx - 30, cy - 1, 60, 3, TILE.STONE);
+	const room = createBlankRoom(MAP_WIDTH, MAP_HEIGHT);
+	const cx = Math.floor(room.width / 2), cy = Math.floor(room.height / 2);
+	fillAreaInRoom(room, cx - 7, cy - 7, 14, 14, TILE.WOOD);
+	fillAreaInRoom(room, cx - 1, cy - 30, 3, 60, TILE.STONE);
+	fillAreaInRoom(room, cx - 30, cy - 1, 60, 3, TILE.STONE);
 
 	for (let i = 0; i < 30; i++) {
 		let rx = Math.floor(Math.random() * 20) + cx - 10;
 		let ry = Math.floor(Math.random() * 20) + cy - 10;
-		if (map[rx][ry] === TILE.WOOD) {
-			map[rx][ry] = TILE.SHELF;
-			items.push({ x: rx, y: ry, data: MOCK_NOTES[i % MOCK_NOTES.length] });
+		if (room.map[rx][ry] === TILE.WOOD) {
+			room.map[rx][ry] = TILE.SHELF;
+			room.items.push({ x: rx, y: ry, data: MOCK_NOTES[i % MOCK_NOTES.length] });
 		}
 	}
-	noteCursor = items.length;
+	noteCursor = room.items.length;
+	setCurrentRoom(room);
 }
 
 function fillArea(x, y, w, h, t) {
@@ -138,7 +168,7 @@ function resetPlayer() {
 }
 
 function update() {
-	if (isModalOpen || !canvas) return;
+	if (isModalOpen || transition.active || !canvas) return;
 
 	if (editor.mode === 'edit') {
 		const panSpeed = 10;
@@ -204,7 +234,9 @@ function updateUI() {
 
 function getNear() {
 	const item = items.find(i => Math.hypot(i.x * TILE_SIZE + 20 - player.x, i.y * TILE_SIZE + 20 - player.y) < 50);
-	return item ? { type: 'item', data: item.data } : null;
+	if (item) return { type: 'item', data: item.data };
+	const table = tables.find(t => Math.hypot(t.x * TILE_SIZE + 20 - player.x, t.y * TILE_SIZE + 20 - player.y) < 50);
+	return table ? { type: 'table', data: table } : null;
 }
 
 /**
@@ -222,6 +254,7 @@ async function loadWorld(path) {
 		CHUNK_SIZE = parsed.chunkSize;
 		map = parsed.map;
 		items = parsed.items;
+		tables = parsed.tables || [];
 		noteCursor = items.length;
 		return true;
 	} catch (err) {
@@ -250,6 +283,7 @@ function parseWorld(text) {
 
 	const localMap = [];
 	const localItems = [];
+	const localTables = [];
 
 	function initMap() {
 		for (let x = 0; x < width; x++) {
@@ -306,6 +340,9 @@ function parseWorld(text) {
 							});
 							noteIndex += 1;
 						}
+						if (tile === TILE.TABLE) {
+							localTables.push({ x, y, roomId: null });
+						}
 					}
 				}
 				row++;
@@ -314,7 +351,60 @@ function parseWorld(text) {
 	}
 
 	if (!width || !height || !localMap.length) return null;
-	return { width, height, chunkSize, map: localMap, items: localItems };
+	return { width, height, chunkSize, map: localMap, items: localItems, tables: localTables };
+}
+
+function roomFromWorldText(text) {
+	const parsed = parseWorld(text);
+	if (!parsed) return null;
+	const room = createBlankRoom(parsed.width, parsed.height);
+	room.map = parsed.map;
+	room.items = parsed.items || [];
+	room.tables = parsed.tables || [];
+	return room;
+}
+
+async function loadPreloadedRooms() {
+	try {
+		const response = await fetch('worlds/rooms/index.json', { cache: 'no-store' });
+		if (!response.ok) return;
+		const data = await response.json();
+		const roomFiles = Array.isArray(data.rooms) ? data.rooms : [];
+		const loadedRooms = [];
+		for (const file of roomFiles) {
+			try {
+				const roomResp = await fetch(`worlds/rooms/${file}`, { cache: 'no-store' });
+				if (!roomResp.ok) continue;
+				const text = await roomResp.text();
+				const room = roomFromWorldText(text);
+				if (room) {
+					room.id = `pre-${room.id}`;
+					roomsById.set(room.id, room);
+					loadedRooms.push(room);
+				}
+			} catch (err) {
+				log(`Failed to load room ${file}`);
+			}
+		}
+		preloadedRooms = loadedRooms;
+		assignPreloadedRooms();
+	} catch (err) {
+		log('No preloaded rooms index found.');
+	}
+}
+
+function assignPreloadedRooms() {
+	if (!currentRoom || !preloadedRooms.length) return;
+	let idx = 0;
+	for (const table of currentRoom.tables) {
+		if (idx >= preloadedRooms.length) break;
+		if (!table.roomId) {
+			table.roomId = preloadedRooms[idx].id;
+			preloadedRooms[idx].parentId = currentRoom.id;
+			preloadedRooms[idx].parentTable = { x: table.x, y: table.y };
+			idx += 1;
+		}
+	}
 }
 
 function hideLoading() {
@@ -346,6 +436,7 @@ function setupEditorUI() {
 		swatch.title = def.label;
 		swatch.style.background = def.color;
 		swatch.dataset.tileId = String(def.id);
+		swatch.textContent = def.label;
 		swatch.addEventListener('click', () => {
 			editor.tile = def.id;
 			updatePaletteUI();
@@ -487,6 +578,31 @@ function toggleEditMode() {
 	if (uiLayer && editor.mode === 'edit') uiLayer.classList.remove('visible');
 }
 
+function setupPanelToggles() {
+	const debugPanel = document.getElementById('debug-console');
+	const editorPanel = document.getElementById('editor-panel');
+	const controlsPanel = document.querySelector('.controls-hint');
+	const toggleDebug = document.getElementById('toggle-debug');
+	const toggleEditor = document.getElementById('toggle-editor');
+	const toggleControls = document.getElementById('toggle-controls');
+
+	if (toggleDebug && debugPanel) {
+		toggleDebug.addEventListener('click', () => {
+			debugPanel.classList.toggle('hidden');
+		});
+	}
+	if (toggleEditor && editorPanel) {
+		toggleEditor.addEventListener('click', () => {
+			editorPanel.classList.toggle('hidden');
+		});
+	}
+	if (toggleControls && controlsPanel) {
+		toggleControls.addEventListener('click', () => {
+			controlsPanel.classList.toggle('hidden');
+		});
+	}
+}
+
 function setZoom(value) {
 	editor.zoom = Math.min(3, Math.max(0.5, Number(value.toFixed(2))));
 	if (editor.updateZoomUI) editor.updateZoomUI();
@@ -529,6 +645,18 @@ function setTile(tx, ty, tile) {
 			});
 			noteCursor += 1;
 		}
+	}
+
+	const tableIndex = tables.findIndex(t => t.x === tx && t.y === ty);
+	if (tableIndex !== -1 && tile !== TILE.TABLE) {
+		tables.splice(tableIndex, 1);
+	}
+	if (tile === TILE.TABLE && tableIndex === -1) {
+		tables.push({
+			x: tx,
+			y: ty,
+			roomId: null
+		});
 	}
 }
 
@@ -640,6 +768,34 @@ function drawBooks(px, py) {
 	}
 }
 
+function drawTablePreview(tx, ty, px, py) {
+	const table = tables.find(t => t.x === tx && t.y === ty);
+	if (!table || !table.roomId) return;
+	const room = roomsById.get(table.roomId);
+	if (!room) return;
+
+	// outline indicator
+	ctx.strokeStyle = 'rgba(255, 255, 255, 0.6)';
+	ctx.lineWidth = 2;
+	ctx.strokeRect(px + 4, py + 4, TILE_SIZE - 8, TILE_SIZE - 8);
+
+	// mini-map preview
+	const previewSize = TILE_SIZE - 12;
+	const cellSize = previewSize / 6;
+	const startX = px + 6;
+	const startY = py + 6;
+	for (let i = 0; i < 6; i++) {
+		for (let j = 0; j < 6; j++) {
+			const mx = Math.floor((i / 6) * room.width);
+			const my = Math.floor((j / 6) * room.height);
+			const tile = room.map[mx]?.[my] ?? TILE.GRASS;
+			const color = TILE_COLORS[tile] || '#fff';
+			ctx.fillStyle = color;
+			ctx.fillRect(startX + i * cellSize, startY + j * cellSize, cellSize, cellSize);
+		}
+	}
+}
+
 function drawGrid() {
 	const viewWidth = canvas.width / editor.zoom;
 	const viewHeight = canvas.height / editor.zoom;
@@ -712,16 +868,243 @@ function closeModal() {
 }
 
 /**
+ * ROOMS
+ */
+function createBlankRoom(width, height) {
+	const room = {
+		id: `room-${roomCounter++}`,
+		width,
+		height,
+		map: [],
+		items: [],
+		tables: [],
+		parentId: null,
+		parentTable: null
+	};
+	for (let x = 0; x < width; x++) {
+		room.map[x] = [];
+		for (let y = 0; y < height; y++) room.map[x][y] = TILE.GRASS;
+	}
+	return room;
+}
+
+function setCurrentRoom(room) {
+	currentRoom = room;
+	MAP_WIDTH = room.width;
+	MAP_HEIGHT = room.height;
+	map = room.map;
+	items = room.items;
+	tables = room.tables;
+	updateBreadcrumb();
+}
+
+function fillAreaInRoom(room, x, y, w, h, t) {
+	for (let i = x; i < x + w; i++) {
+		for (let j = y; j < y + h; j++) {
+			if (i >= 0 && i < room.width && j >= 0 && j < room.height) {
+				room.map[i][j] = t;
+			}
+		}
+	}
+}
+
+function generateMiniRoom(depth = 0) {
+	const size = 20;
+	const room = createBlankRoom(size, size);
+	fillAreaInRoom(room, 0, 0, size, 1, TILE.WALL);
+	fillAreaInRoom(room, 0, size - 1, size, 1, TILE.WALL);
+	fillAreaInRoom(room, 0, 0, 1, size, TILE.WALL);
+	fillAreaInRoom(room, size - 1, 0, 1, size, TILE.WALL);
+
+	const tableCount = Math.max(1, Math.floor(size / 8));
+	for (let i = 0; i < tableCount; i++) {
+		const tx = 2 + Math.floor(Math.random() * (size - 4));
+		const ty = 2 + Math.floor(Math.random() * (size - 4));
+		room.map[tx][ty] = TILE.TABLE;
+		room.tables.push({ x: tx, y: ty, roomId: null });
+	}
+	return room;
+}
+
+function enterTableRoom(table) {
+	if (!currentRoom) return;
+	let targetRoom = null;
+	if (table.roomId) {
+		targetRoom = roomStack.find(r => r.id === table.roomId) || null;
+	}
+	if (!targetRoom) {
+		targetRoom = generateMiniRoom(roomStack.length);
+		targetRoom.parentId = currentRoom.id;
+		targetRoom.parentTable = { x: table.x, y: table.y };
+		table.roomId = targetRoom.id;
+		roomStack.push(targetRoom);
+		roomsById.set(targetRoom.id, targetRoom);
+	}
+	startTransition('enter', currentRoom, targetRoom);
+}
+
+function leaveTableRoom() {
+	if (!currentRoom || !currentRoom.parentId) return;
+	const parentRoom = roomsById.get(currentRoom.parentId) || roomStack.find(r => r.id === currentRoom.parentId);
+	if (!parentRoom) return;
+	startTransition('leave', currentRoom, parentRoom);
+}
+
+function updateBreadcrumb() {
+	const crumb = document.getElementById('room-breadcrumb');
+	if (!crumb || !currentRoom) return;
+	const depth = roomStack.indexOf(currentRoom);
+	const label = depth >= 0 ? `Room: Depth ${depth}` : 'Room: Root';
+	crumb.textContent = label;
+}
+
+function startTransition(type, fromRoom, toRoom) {
+	if (transition.active) return;
+	transition.active = true;
+	transition.type = type;
+	transition.t = 0;
+	transition.duration = 180;
+	transition.fromScale = type === 'enter' ? 0.2 : 1;
+	transition.toScale = type === 'enter' ? 1 : 0.2;
+	transition.scale = transition.fromScale;
+	transition.fromRoom = fromRoom;
+	transition.toRoom = toRoom;
+	transition.fromPlayer = { x: player.x, y: player.y, z: player.z };
+	transition.toPlayer = null;
+	transition.pivotWorld = null;
+	transition.switched = false;
+	transition.ease = 0;
+
+	if (type === 'leave' && fromRoom.parentTable) {
+		const exitX = (fromRoom.parentTable.x + 1) * TILE_SIZE + 20;
+		const exitY = (fromRoom.parentTable.y) * TILE_SIZE + 20;
+		transition.toPlayer = { x: exitX, y: exitY, z: 0 };
+		transition.pivotWorld = { x: exitX, y: exitY };
+	}
+	if (type === 'enter' && fromRoom && toRoom && fromRoom.parentId !== toRoom.id) {
+		const table = fromRoom.tables?.find(t => t.roomId === toRoom.id);
+		if (table) {
+			transition.pivotWorld = {
+				x: table.x * TILE_SIZE + TILE_SIZE / 2,
+				y: table.y * TILE_SIZE + TILE_SIZE / 2
+			};
+		}
+	}
+
+	const step = () => {
+		if (!transition.active) return;
+		transition.t += 1;
+		const p = Math.min(1, transition.t / transition.duration);
+		transition.ease = easeInOut(p);
+		if (!transition.switched && p >= transition.swapAt) {
+			setCurrentRoom(transition.toRoom);
+			transition.switched = true;
+		}
+		transition.scale = transition.fromScale + (transition.toScale - transition.fromScale) * transition.ease;
+		if (transition.t >= transition.duration) {
+			finishTransition();
+		} else {
+			requestAnimationFrame(step);
+		}
+	};
+	requestAnimationFrame(step);
+}
+
+function finishTransition() {
+	if (!transition.active) return;
+	if (transition.type === 'enter') {
+		setCurrentRoom(transition.toRoom);
+		teleportToCenter();
+		player.vz = 3;
+	} else if (transition.type === 'leave') {
+		setCurrentRoom(transition.toRoom);
+		if (transition.toPlayer) {
+			player.x = transition.toPlayer.x;
+			player.y = transition.toPlayer.y;
+			player.vz = 4;
+			player.z = 0;
+		} else {
+			teleportToCenter();
+		}
+	}
+	transition.active = false;
+	transition.type = null;
+	transition.scale = 1;
+	transition.ease = 0;
+}
+
+function easeInOut(t) {
+	return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+}
+
+function lerp(a, b, t) {
+	return a + (b - a) * t;
+}
+
+function drawRoomLayer(room, scaleFactor, alpha, pivotWorld = null) {
+	const prev = currentRoom;
+	setCurrentRoom(room);
+	ctx.save();
+	ctx.globalAlpha = alpha;
+	const scale = editor.zoom * scaleFactor;
+	const pivot = pivotWorld || { x: camera.x + canvas.width / (2 * editor.zoom), y: camera.y + canvas.height / (2 * editor.zoom) };
+	const screenPivotX = (pivot.x - camera.x) * editor.zoom;
+	const screenPivotY = (pivot.y - camera.y) * editor.zoom;
+	// Tiles draw from top-left (px, py). Pivot is in world coords and we scale around it.
+	ctx.translate(screenPivotX, screenPivotY);
+	ctx.scale(scale, scale);
+	ctx.translate(-pivot.x, -pivot.y);
+
+	const viewWidth = canvas.width / scale;
+	const viewHeight = canvas.height / scale;
+	for (let x = 0; x < MAP_WIDTH; x++) {
+		for (let y = 0; y < MAP_HEIGHT; y++) {
+			const px = x * TILE_SIZE, py = y * TILE_SIZE;
+			if (px < camera.x - 50 || px > camera.x + viewWidth + 50 ||
+				py < camera.y - 50 || py > camera.y + viewHeight + 50) continue;
+			const color = TILE_COLORS[map[x][y]] || '#fff';
+			ctx.fillStyle = color;
+			ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+			if (map[x][y] === TILE.SHELF) drawBooks(px, py);
+			if (map[x][y] === TILE.TABLE) drawTablePreview(x, y, px, py);
+		}
+	}
+	ctx.restore();
+	setCurrentRoom(prev);
+}
+
+/**
  * RENDERING
  */
 function draw() {
 	if (!ctx || !canvas) return;
+	drawSceneWithBackground();
+}
+
+function drawSceneWithBackground() {
+	if (!ctx || !canvas) return;
 	ctx.setTransform(1, 0, 0, 1, 0, 0);
 	ctx.clearRect(0, 0, canvas.width, canvas.height);
-	ctx.setTransform(editor.zoom, 0, 0, editor.zoom, -camera.x * editor.zoom, -camera.y * editor.zoom);
+	if (transition.active) {
+		drawTransitionLayers();
+		return;
+	}
+	if (currentRoom && currentRoom.parentId) {
+		const parentRoom = roomsById.get(currentRoom.parentId);
+		if (parentRoom) drawRoomLayer(parentRoom, 1, 0.35);
+	}
+	const scale = editor.zoom;
+	const pivotWorld = { x: camera.x + canvas.width / (2 * editor.zoom), y: camera.y + canvas.height / (2 * editor.zoom) };
 
-	const viewWidth = canvas.width / editor.zoom;
-	const viewHeight = canvas.height / editor.zoom;
+	// Tiles are drawn from top-left (px, py). We scale around a world pivot to make the dive feel like it targets the table.
+	const screenPivotX = (pivotWorld.x - camera.x) * editor.zoom;
+	const screenPivotY = (pivotWorld.y - camera.y) * editor.zoom;
+	ctx.translate(screenPivotX, screenPivotY);
+	ctx.scale(scale, scale);
+	ctx.translate(-pivotWorld.x, -pivotWorld.y);
+
+	const viewWidth = canvas.width / scale;
+	const viewHeight = canvas.height / scale;
 	for (let x = 0; x < MAP_WIDTH; x++) {
 		for (let y = 0; y < MAP_HEIGHT; y++) {
 			const px = x * TILE_SIZE, py = y * TILE_SIZE;
@@ -732,6 +1115,7 @@ function draw() {
 			ctx.fillStyle = color;
 			ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
 			if (map[x][y] === TILE.SHELF) drawBooks(px, py);
+			if (map[x][y] === TILE.TABLE) drawTablePreview(x, y, px, py);
 		}
 	}
 
@@ -740,7 +1124,7 @@ function draw() {
 		drawDragPreview();
 	}
 
-	// Shadow under player
+	// Shadow under player (player size stays constant; camera/world scale does the work)
 	const shadowScale = Math.max(0.2, 1 - player.z / 60);
 	ctx.save();
 	ctx.fillStyle = 'rgba(0, 0, 0, 0.35)';
@@ -756,6 +1140,23 @@ function draw() {
 
 	ctx.setTransform(1, 0, 0, 1, 0, 0);
 }
+
+function drawTransitionLayers() {
+	const ease = transition.ease;
+	const enter = transition.type === 'enter';
+	const pivot = transition.pivotWorld || { x: player.x, y: player.y };
+	const parentRoom = transition.fromRoom;
+	const childRoom = transition.toRoom;
+
+	const parentScale = enter ? (1 + 3.2 * ease) : (3.5 - 3.0 * ease);
+	const childScale = enter ? (0.25 + 0.75 * ease) : (1 - 0.8 * ease);
+	const parentAlpha = enter ? (1 - 0.1 * ease) : (0.4 + 0.6 * (1 - ease));
+	const childAlpha = enter ? (0.2 + 0.8 * ease) : (1 - 0.6 * ease);
+
+	drawRoomLayer(parentRoom, parentScale, parentAlpha, pivot);
+	drawRoomLayer(childRoom, childScale, childAlpha, pivot);
+}
+
 
 function gameLoop() {
 	update();
@@ -776,7 +1177,8 @@ window.addEventListener('keydown', e => {
 	if (editor.mode === 'edit' && e.code !== 'KeyP' && e.code !== 'Escape') return;
 	if (e.code === 'KeyE') {
 		const near = getNear();
-		if (near) openModal(near.data.title, near.data.content);
+		if (near && near.type === 'item') openModal(near.data.title, near.data.content);
+		if (near && near.type === 'table') enterTableRoom(near.data);
 	}
 	if (e.code === 'Space' && !isModalOpen && player.dashCooldown === 0) {
 		player.vz = 6;
@@ -789,6 +1191,7 @@ window.addEventListener('keydown', e => {
 		else closeModal();
 	}
 	if (e.code === 'KeyP') toggleEditMode();
+	if (e.code === 'KeyQ') leaveTableRoom();
 });
 window.addEventListener('keyup', e => { keys[e.code] = false; });
 window.addEventListener('resize', resize);
@@ -804,6 +1207,7 @@ window.addEventListener('DOMContentLoaded', () => {
 
 	setupEditorUI();
 	setupEditorInput();
+	setupPanelToggles();
 });
 
 // Expose for inline handlers

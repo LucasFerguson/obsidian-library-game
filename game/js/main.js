@@ -2,12 +2,12 @@ import * as THREE from '../vendor/three.module.js';
 
 const WORLD_PATH = '/worlds/zen.txt';
 const TILE_SIZE = 1;
-const WALK_SPEED = 0.11;
-const RUN_SPEED = 0.18;
+const WALK_ACCEL = 1.2;
+const RUN_ACCEL = 2.6;
 const PAN_SPEED = 0.12;
 const GRAVITY = 0.008;
 const JUMP_VELOCITY = 0.2;
-const JUMP_FORWARD_BOOST = 0.25;
+const JUMP_FORWARD_BOOST = 0.15;
 const TURN_SPEED = 0.15;
 const CAMERA_LAG = 0.12;
 const MOUSE_SENSITIVITY = 0.0025;
@@ -16,7 +16,6 @@ const PITCH_MAX = 1.3;
 const ZOOM_MIN = 6;
 const ZOOM_MAX = 18;
 const CAMERA_MIN_Y = 1.2;
-const MOVE_ACCEL = 2.5;
 const MAX_SPEED_WALK = 1.22;
 const MAX_SPEED_RUN = 1.6;
 const DRAG = 0.9;
@@ -111,7 +110,7 @@ let cursorMesh;
 let previewRect;
 let previewCircle;
 const clock = new THREE.Clock();
-let invertMouseY = false;
+let invertMouseY = true;
 let invertMouseToggle;
 
 init();
@@ -226,6 +225,7 @@ function setupUI() {
 	if (exportClose) exportClose.addEventListener('click', closeExportModal);
 	if (exportBtn) exportBtn.addEventListener('click', openExportModal);
 	if (invertMouseToggle) {
+		invertMouseToggle.checked = invertMouseY;
 		invertMouseToggle.addEventListener('change', () => {
 			invertMouseY = invertMouseToggle.checked;
 			console.log('[Library3D] invert mouse', invertMouseY);
@@ -474,9 +474,9 @@ function update(dt) {
 		moveX /= rawLength;
 		moveZ /= rawLength;
 		const isRunning = keys['ShiftLeft'] || keys['ShiftRight'];
-		const speed = isRunning ? RUN_SPEED : WALK_SPEED;
-		accel.addScaledVector(forward, moveZ * MOVE_ACCEL * speed);
-		accel.addScaledVector(right, moveX * MOVE_ACCEL * speed);
+		const accelValue = isRunning ? RUN_ACCEL : WALK_ACCEL;
+		accel.addScaledVector(forward, moveZ * accelValue);
+		accel.addScaledVector(right, moveX * accelValue);
 	}
 
 	const inWater = isInWater(player.position.x, player.position.z);

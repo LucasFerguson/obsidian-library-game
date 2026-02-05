@@ -17,12 +17,22 @@
 		<b>SPACE</b>: Dash/Jump<br>
 		<b>E</b>: Read Book<br>
 		<b>P</b>: Toggle Plan/Edit Mode<br>
+		<b>Q</b>: Leave Table Room<br>
 		<b>Edit</b>: WASD or Right-Drag to Pan
 	</div>
 
-	<div id="debug-console">
+	<div id="debug-console" class="panel">
 		<div style="font-weight: bold; margin-bottom: 5px;">DEBUG CONSOLE</div>
+		<div id="room-breadcrumb">Room: Root</div>
 		<div id="player-pos">X: 0 Y: 0</div>
+		<div class="panel-row">
+			<span class="label">Panels</span>
+			<div class="tool-group">
+				<button class="tool-btn" id="toggle-debug">Debug</button>
+				<button class="tool-btn" id="toggle-editor">Builder</button>
+				<button class="tool-btn" id="toggle-controls">Hints</button>
+			</div>
+		</div>
 		<button class="debug-btn" onclick="teleportToCenter()">Teleport to Center</button>
 		<button class="debug-btn" onclick="resetPlayer()">Reset Momentum</button>
 	</div>
