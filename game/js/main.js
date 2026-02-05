@@ -2,8 +2,8 @@ import * as THREE from '../vendor/three.module.js';
 
 const WORLD_PATH = '/worlds/zen.txt';
 const TILE_SIZE = 1;
-const WALK_ACCEL = 1.2;
-const RUN_ACCEL = 2.6;
+const WALK_ACCEL = 0.45;
+const RUN_ACCEL = 0.9;
 const PAN_SPEED = 0.12;
 const GRAVITY = 0.008;
 const JUMP_VELOCITY = 0.2;
@@ -16,10 +16,14 @@ const PITCH_MAX = 1.3;
 const ZOOM_MIN = 6;
 const ZOOM_MAX = 18;
 const CAMERA_MIN_Y = 1.2;
-const MAX_SPEED_WALK = 1.22;
-const MAX_SPEED_RUN = 1.6;
+const MAX_SPEED_WALK = 0.45;
+const MAX_SPEED_RUN = 0.7;
 const DRAG = 0.9;
 const PLAYER_RADIUS = 0.32;
+const PLAYER_SCALE_MIN = 0.12;
+const PLAYER_SCALE_MAX = 1;
+const SCALE_LERP = 0.02;
+const MINI_ROOM_SCALE = 0.12;
 
 const TILE = { VOID: 0, GRASS: 1, WOOD: 2, STONE: 3, WATER: 4, SAND: 5, WALL: 6, SHELF: 7, TABLE: 8 };
 
@@ -49,6 +53,9 @@ let mapWidth = 0;
 let mapHeight = 0;
 let chunkSize = 16;
 let noteCursor = 0;
+let rooms = new Map();
+let rootRoomId = null;
+let currentRoomId = null;
 
 let renderer;
 let scene;
@@ -58,13 +65,16 @@ let activeCamera;
 let sunLight;
 let rootGroup;
 let booksGroup;
+let roomGroupRoot;
 
 const player = {
 	position: new THREE.Vector3(0, 0.2, 0),
 	velocity: new THREE.Vector3(0, 0, 0),
 	jumpVelocity: 0,
 	canJump: true,
-	heading: new THREE.Vector3(0, 0, 1)
+	heading: new THREE.Vector3(0, 0, 1),
+	scale: 1,
+	targetScale: 1
 };
 
 const cameraRig = {
@@ -112,6 +122,7 @@ let previewCircle;
 const clock = new THREE.Clock();
 let invertMouseY = true;
 let invertMouseToggle;
+let debugAxesGroup;
 
 init();
 
@@ -163,6 +174,12 @@ function setupScene() {
 
 	booksGroup = new THREE.Group();
 	scene.add(booksGroup);
+
+	roomGroupRoot = new THREE.Group();
+	scene.add(roomGroupRoot);
+
+	debugAxesGroup = new THREE.Group();
+	scene.add(debugAxesGroup);
 
 	cursorMesh = new THREE.Mesh(
 		new THREE.RingGeometry(0.22, 0.28, 24),
@@ -356,47 +373,123 @@ function buildWorld() {
 	console.log('[Library3D] buildWorld');
 	rootGroup.clear();
 	booksGroup.clear();
+	roomGroupRoot.clear();
+	buildRoomHierarchy();
+	console.log('[Library3D] buildWorld complete');
+}
 
+function buildRoomHierarchy() {
+	rooms.clear();
+	rootRoomId = 'root';
+	currentRoomId = rootRoomId;
+
+	const rootRoom = createRoomFromMap(rootRoomId, map, mapWidth, mapHeight, new THREE.Vector3(0, 0, 0), null);
+	rooms.set(rootRoomId, rootRoom);
+	roomGroupRoot.add(rootRoom.group);
+	debugAxesGroup.clear();
+	debugAxesGroup.add(new THREE.AxesHelper(2));
+
+	for (const table of rootRoom.tables) {
+		const childRoom = createMiniRoom(`room-${table.x}-${table.y}`, table.position);
+		table.childRoomId = childRoom.id;
+		childRoom.parentRoomId = rootRoomId;
+		childRoom.parentTable = table;
+		rooms.set(childRoom.id, childRoom);
+		rootRoom.group.add(childRoom.group);
+		const axes = new THREE.AxesHelper(0.5);
+		axes.position.copy(childRoom.group.position);
+		debugAxesGroup.add(axes);
+	}
+}
+
+function createRoomFromMap(id, roomMap, width, height, position, parentId) {
+	const group = new THREE.Group();
+	group.position.copy(position);
+
+	const tables = [];
 	const materialCache = new Map();
 	const meshCache = new Map();
-
 	for (const def of TILE_DEFS) {
 		const material = new THREE.MeshStandardMaterial({ color: def.color });
 		materialCache.set(def.id, material);
-
 		const geo = new THREE.BoxGeometry(TILE_SIZE, def.height, TILE_SIZE);
-		const mesh = new THREE.InstancedMesh(geo, material, mapWidth * mapHeight);
+		const mesh = new THREE.InstancedMesh(geo, material, width * height);
 		mesh.castShadow = false;
 		mesh.receiveShadow = true;
 		mesh.count = 0;
 		meshCache.set(def.id, mesh);
-		rootGroup.add(mesh);
+		group.add(mesh);
 	}
 
 	const dummy = new THREE.Object3D();
-	for (let x = 0; x < mapWidth; x++) {
-		for (let y = 0; y < mapHeight; y++) {
-			const tile = map[x][y];
+	for (let x = 0; x < width; x++) {
+		for (let y = 0; y < height; y++) {
+			const tile = roomMap[x][y];
 			const def = TILE_BY_ID[tile];
 			if (!def) continue;
 			const mesh = meshCache.get(tile);
 			if (!mesh) continue;
-			const height = def.height;
-			dummy.position.set(x * TILE_SIZE, height / 2, y * TILE_SIZE);
+			const heightValue = def.height;
+			dummy.position.set(x * TILE_SIZE, heightValue / 2, y * TILE_SIZE);
 			dummy.updateMatrix();
 			mesh.setMatrixAt(mesh.count, dummy.matrix);
 			mesh.count += 1;
-			if (tile === TILE.SHELF) addBooksAt(x, y);
+			if (tile === TILE.SHELF) addBooksAt(group, x, y);
+			if (tile === TILE.TABLE) {
+				const tableTop = TILE_BY_ID[TILE.TABLE].height;
+				tables.push({
+					x,
+					y,
+					position: new THREE.Vector3(x * TILE_SIZE + TILE_SIZE / 2, tableTop, y * TILE_SIZE + TILE_SIZE / 2),
+					childRoomId: null
+				});
+			}
 		}
 	}
-
 	meshCache.forEach(mesh => {
 		mesh.instanceMatrix.needsUpdate = true;
 	});
-	console.log('[Library3D] buildWorld complete');
+
+	return {
+		id,
+		group,
+		map: roomMap,
+		width,
+		height,
+		tables,
+		centerOffset: new THREE.Vector3((width * TILE_SIZE) / 2, 0, (height * TILE_SIZE) / 2),
+		parentRoomId: parentId
+	};
 }
 
-function addBooksAt(x, y) {
+function createMiniRoom(id, worldPosition) {
+	const size = 20;
+	const roomMap = [];
+	for (let x = 0; x < size; x++) {
+		roomMap[x] = [];
+		for (let y = 0; y < size; y++) roomMap[x][y] = TILE.GRASS;
+	}
+	for (let i = 0; i < size; i++) {
+		roomMap[i][0] = TILE.WALL;
+		roomMap[i][size - 1] = TILE.WALL;
+		roomMap[0][i] = TILE.WALL;
+		roomMap[size - 1][i] = TILE.WALL;
+	}
+	// Center the child room on the table by offsetting its group by half its size.
+	const room = createRoomFromMap(
+		id,
+		roomMap,
+		size,
+		size,
+		new THREE.Vector3(worldPosition.x, worldPosition.y + 0.02, worldPosition.z),
+		rootRoomId
+	);
+	room.group.position.sub(room.centerOffset.clone().multiplyScalar(MINI_ROOM_SCALE));
+	room.group.scale.setScalar(MINI_ROOM_SCALE);
+	return room;
+}
+
+function addBooksAt(parentGroup, x, y) {
 	const seed = (x * 73856093) ^ (y * 19349663);
 	const colors = [0xef5350, 0xec407a, 0xab47bc, 0x42a5f5, 0x26a69a, 0xffca28];
 	const count = 3 + (Math.abs(seed) % 3);
@@ -413,7 +506,7 @@ function addBooksAt(x, y) {
 			0.45,
 			y * TILE_SIZE + 0.25
 		);
-		booksGroup.add(book);
+		parentGroup.add(book);
 	}
 }
 
@@ -435,6 +528,10 @@ function spawnPlayer() {
 	playerShadow.rotation.x = -Math.PI / 2;
 	playerShadow.position.y = 0.01;
 	scene.add(playerShadow);
+
+	player.scale = 1;
+	player.targetScale = 1;
+	playerMesh.scale.set(1, 1, 1);
 }
 
 function animate() {
@@ -455,6 +552,13 @@ function update(dt) {
 		return;
 	}
 	if (cursorMesh) cursorMesh.visible = false;
+
+	// Smooth scale towards target
+	player.scale += (player.targetScale - player.scale) * SCALE_LERP;
+	const clampedScale = Math.min(PLAYER_SCALE_MAX, Math.max(PLAYER_SCALE_MIN, player.scale));
+	player.scale = clampedScale;
+	playerMesh.scale.setScalar(player.scale);
+	playerShadow.scale.setScalar(player.scale);
 
 	let moveX = 0;
 	let moveZ = 0;
@@ -483,7 +587,7 @@ function update(dt) {
 	const speedMultiplier = inWater ? 0.6 : 1;
 	accel.multiplyScalar(dt * speedMultiplier);
 	player.velocity.add(accel);
-	const maxSpeed = (keys['ShiftLeft'] || keys['ShiftRight'] ? MAX_SPEED_RUN : MAX_SPEED_WALK) * speedMultiplier;
+	const maxSpeed = (keys['ShiftLeft'] || keys['ShiftRight'] ? MAX_SPEED_RUN : MAX_SPEED_WALK) * speedMultiplier * player.scale;
 	if (player.velocity.length() > maxSpeed) {
 		player.velocity.setLength(maxSpeed);
 	}
@@ -530,10 +634,11 @@ function updateCamera() {
 	const sinPitch = Math.sin(cameraRig.pitch);
 	const sinYaw = Math.sin(cameraRig.yaw);
 	const cosYaw = Math.cos(cameraRig.yaw);
+	const camDistance = cameraRig.distance * player.scale;
 	const offset = new THREE.Vector3(
-		-sinYaw * cameraRig.distance * cosPitch,
-		cameraRig.distance * sinPitch + 4,
-		-cosYaw * cameraRig.distance * cosPitch
+		-sinYaw * camDistance * cosPitch,
+		camDistance * sinPitch + 4 * player.scale,
+		-cosYaw * camDistance * cosPitch
 	);
 	const desiredPos = cameraRig.target.clone().add(offset);
 	camera.position.lerp(desiredPos, CAMERA_LAG);
@@ -607,19 +712,74 @@ function onKeyDown(e) {
 	if (editor.mode === 'edit') return;
 	if (e.code === 'Space' && player.canJump) {
 		const inWater = isInWater(player.position.x, player.position.z);
-		player.jumpVelocity = inWater ? JUMP_VELOCITY * 0.6 : JUMP_VELOCITY;
+		player.jumpVelocity = (inWater ? JUMP_VELOCITY * 0.6 : JUMP_VELOCITY) * player.scale;
 		player.canJump = false;
-		player.velocity.addScaledVector(player.heading, JUMP_FORWARD_BOOST);
+		player.velocity.addScaledVector(player.heading, JUMP_FORWARD_BOOST * player.scale);
 		console.log('[Library3D] jump');
 	}
 	if (e.code === 'KeyE') {
 		const near = getNearItem();
 		if (near) openModal(near.data);
 	}
+	if (e.code === 'KeyF') tryEnterTable();
+	if (e.code === 'KeyQ') tryExitRoom();
 }
 
 function onKeyUp(e) {
 	keys[e.code] = false;
+}
+
+function tryEnterTable() {
+	const room = rooms.get(currentRoomId);
+	if (!room) return;
+	const table = getNearTable(room);
+	if (!table || !table.childRoomId) return;
+	const childRoom = rooms.get(table.childRoomId);
+	if (!childRoom) return;
+	currentRoomId = childRoom.id;
+	player.targetScale = childRoom.group.scale.x;
+	const tableWorld = tableWorldPosition(table, room);
+	const spawn = roomCenterWorld(childRoom);
+	player.position.set(spawn.x, tableWorld.y + 0.2 * player.targetScale, spawn.z);
+	player.velocity.set(0, 0, 0);
+	console.log('[Library3D] enter room', childRoom.id);
+}
+
+function tryExitRoom() {
+	const room = rooms.get(currentRoomId);
+	if (!room || !room.parentTable) return;
+	currentRoomId = room.parentRoomId;
+	player.targetScale = PLAYER_SCALE_MAX;
+	const tableWorld = tableWorldPosition(room.parentTable, rooms.get(currentRoomId));
+	player.position.set(tableWorld.x, tableWorld.y + 0.2 * player.targetScale, tableWorld.z);
+	player.velocity.set(0, 0, 0);
+	console.log('[Library3D] exit room', currentRoomId);
+}
+
+function getNearTable(room) {
+	if (!room) return null;
+	const threshold = 0.9 * player.scale;
+	return room.tables.find(table => {
+		const worldPos = tableWorldPosition(table, room);
+		const dx = worldPos.x - player.position.x;
+		const dz = worldPos.z - player.position.z;
+		return Math.hypot(dx, dz) < threshold;
+	}) || null;
+}
+
+function roomCenterWorld(room) {
+	const localCenter = new THREE.Vector3(
+		(room.width * TILE_SIZE) / 2,
+		0,
+		(room.height * TILE_SIZE) / 2
+	);
+	return room.group.localToWorld(localCenter);
+}
+
+function tableWorldPosition(table, room) {
+	const local = table.position.clone();
+	if (!room) return local;
+	return room.group.localToWorld(local);
 }
 
 function onMouseLook(e) {
@@ -904,11 +1064,12 @@ function updateEditPreview() {
 }
 
 function isBlocked(x, z) {
+	const radius = PLAYER_RADIUS * player.scale;
 	const points = [
-		{ x: x - PLAYER_RADIUS, z: z - PLAYER_RADIUS },
-		{ x: x + PLAYER_RADIUS, z: z - PLAYER_RADIUS },
-		{ x: x - PLAYER_RADIUS, z: z + PLAYER_RADIUS },
-		{ x: x + PLAYER_RADIUS, z: z + PLAYER_RADIUS }
+		{ x: x - radius, z: z - radius },
+		{ x: x + radius, z: z - radius },
+		{ x: x - radius, z: z + radius },
+		{ x: x + radius, z: z + radius }
 	];
 	for (const p of points) {
 		const tile = tileAtWorld(p.x, p.z);
@@ -919,10 +1080,14 @@ function isBlocked(x, z) {
 }
 
 function tileAtWorld(x, z) {
-	const tx = Math.floor(x / TILE_SIZE + 0.5);
-	const ty = Math.floor(z / TILE_SIZE + 0.5);
-	if (tx < 0 || ty < 0 || tx >= mapWidth || ty >= mapHeight) return null;
-	return map[tx][ty];
+	const room = rooms.get(currentRoomId);
+	if (!room) return null;
+	const local = new THREE.Vector3(x, 0, z);
+	room.group.worldToLocal(local);
+	const tx = Math.floor(local.x / TILE_SIZE + 0.5);
+	const ty = Math.floor(local.z / TILE_SIZE + 0.5);
+	if (tx < 0 || ty < 0 || tx >= room.width || ty >= room.height) return null;
+	return room.map[tx][ty];
 }
 
 function isInWater(x, z) {

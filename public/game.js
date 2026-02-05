@@ -69,6 +69,7 @@ let transition = {
 };
 let preloadedRooms = [];
 let isExportOpen = false;
+let debugTick = 0;
 
 const editor = {
 	mode: 'play',
@@ -169,6 +170,7 @@ function resetPlayer() {
 
 function update() {
 	if (isModalOpen || transition.active || !canvas) return;
+	debugTick++;
 
 	if (editor.mode === 'edit') {
 		const panSpeed = 10;
@@ -203,7 +205,8 @@ function update() {
 
 	// Update Debug Text
 	const debugPos = document.getElementById('player-pos');
-	if (debugPos) debugPos.innerText = `X: ${Math.floor(player.x)} Y: ${Math.floor(player.y)}`;
+	if (debugPos) debugPos.innerText = `Player: X ${Math.floor(player.x)} Y ${Math.floor(player.y)}`;
+	if (debugTick % 30 === 0) updateDebugOverlay();
 
 	updateUI();
 }
@@ -958,6 +961,39 @@ function updateBreadcrumb() {
 	crumb.textContent = label;
 }
 
+function updateDebugOverlay() {
+	const cameraPos = document.getElementById('camera-pos');
+	const zoomPos = document.getElementById('zoom-pos');
+	const pivotPos = document.getElementById('pivot-pos');
+	const transitionPos = document.getElementById('transition-pos');
+
+	if (cameraPos) cameraPos.textContent = `Camera: X ${camera.x.toFixed(1)} Y ${camera.y.toFixed(1)}`;
+	if (zoomPos) zoomPos.textContent = `Zoom: ${editor.zoom.toFixed(2)}`;
+	if (pivotPos) {
+		const pivot = transition.active && transition.pivotWorld
+			? transition.pivotWorld
+			: { x: camera.x + canvas.width / (2 * editor.zoom), y: camera.y + canvas.height / (2 * editor.zoom) };
+		pivotPos.textContent = `Pivot: X ${pivot.x.toFixed(1)} Y ${pivot.y.toFixed(1)}`;
+	}
+	if (transitionPos) {
+		if (!transition.active) {
+			transitionPos.textContent = 'Transition: idle';
+		} else {
+			transitionPos.textContent = `Transition: ${transition.type} t=${transition.t}/${transition.duration} scale=${transition.scale.toFixed(2)}`;
+		}
+	}
+
+	if (debugTick % 120 === 0) {
+		console.log('[Debug]', {
+			player: { x: player.x.toFixed(1), y: player.y.toFixed(1), z: player.z.toFixed(1) },
+			camera: { x: camera.x.toFixed(1), y: camera.y.toFixed(1) },
+			zoom: editor.zoom.toFixed(2),
+			pivot: transition.pivotWorld,
+			transition: transition.active ? `${transition.type} ${transition.t}/${transition.duration}` : 'idle'
+		});
+	}
+}
+
 function startTransition(type, fromRoom, toRoom) {
 	if (transition.active) return;
 	transition.active = true;
@@ -1087,6 +1123,7 @@ function drawSceneWithBackground() {
 	ctx.clearRect(0, 0, canvas.width, canvas.height);
 	if (transition.active) {
 		drawTransitionLayers();
+		drawDebugMarkers();
 		return;
 	}
 	if (currentRoom && currentRoom.parentId) {
@@ -1139,6 +1176,7 @@ function drawSceneWithBackground() {
 	ctx.fill();
 
 	ctx.setTransform(1, 0, 0, 1, 0, 0);
+	drawDebugMarkers();
 }
 
 function drawTransitionLayers() {
@@ -1155,6 +1193,63 @@ function drawTransitionLayers() {
 
 	drawRoomLayer(parentRoom, parentScale, parentAlpha, pivot);
 	drawRoomLayer(childRoom, childScale, childAlpha, pivot);
+}
+
+function drawDebugMarkers() {
+	if (!canvas) return;
+	const pivot = transition.active && transition.pivotWorld
+		? transition.pivotWorld
+		: { x: camera.x + canvas.width / (2 * editor.zoom), y: camera.y + canvas.height / (2 * editor.zoom) };
+
+	const screenPivotX = (pivot.x - camera.x) * editor.zoom;
+	const screenPivotY = (pivot.y - camera.y) * editor.zoom;
+	const screenCenterX = canvas.width / 2;
+	const screenCenterY = canvas.height / 2;
+	const viewWidth = canvas.width / editor.zoom;
+	const viewHeight = canvas.height / editor.zoom;
+	const playerScreenX = (player.x - camera.x) * editor.zoom;
+	const playerScreenY = (player.y - camera.y) * editor.zoom;
+
+	ctx.save();
+	ctx.setTransform(1, 0, 0, 1, 0, 0);
+	ctx.lineWidth = 2;
+
+	// Pivot crosshair (magenta)
+	ctx.strokeStyle = 'rgba(255, 0, 200, 0.9)';
+	ctx.beginPath();
+	ctx.moveTo(screenPivotX - 8, screenPivotY);
+	ctx.lineTo(screenPivotX + 8, screenPivotY);
+	ctx.moveTo(screenPivotX, screenPivotY - 8);
+	ctx.lineTo(screenPivotX, screenPivotY + 8);
+	ctx.stroke();
+
+	// Camera center crosshair (cyan)
+	ctx.strokeStyle = 'rgba(0, 255, 255, 0.8)';
+	ctx.beginPath();
+	ctx.moveTo(screenCenterX - 8, screenCenterY);
+	ctx.lineTo(screenCenterX + 8, screenCenterY);
+	ctx.moveTo(screenCenterX, screenCenterY - 8);
+	ctx.lineTo(screenCenterX, screenCenterY + 8);
+	ctx.stroke();
+
+	// Player marker (green)
+	ctx.strokeStyle = 'rgba(0, 255, 0, 0.8)';
+	ctx.beginPath();
+	ctx.arc(playerScreenX, playerScreenY, 6, 0, Math.PI * 2);
+	ctx.stroke();
+
+	// View bounds (yellow) based on world-space extents
+	ctx.strokeStyle = 'rgba(255, 220, 0, 0.5)';
+	const left = camera.x;
+	const top = camera.y;
+	const right = camera.x + viewWidth;
+	const bottom = camera.y + viewHeight;
+	const x0 = (left - camera.x) * editor.zoom;
+	const y0 = (top - camera.y) * editor.zoom;
+	const x1 = (right - camera.x) * editor.zoom;
+	const y1 = (bottom - camera.y) * editor.zoom;
+	ctx.strokeRect(x0, y0, x1 - x0, y1 - y0);
+	ctx.restore();
 }
 
 
